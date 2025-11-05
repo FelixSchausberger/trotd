@@ -31,6 +31,15 @@ impl Cache {
         })
     }
 
+    /// Create a cache instance with a custom directory (for testing)
+    #[cfg(test)]
+    fn with_dir(cache_dir: PathBuf, ttl_mins: u64) -> Self {
+        Self {
+            cache_dir,
+            ttl_secs: ttl_mins * 60,
+        }
+    }
+
     /// Get cache file path for a provider
     fn cache_file(&self, provider: &str) -> PathBuf {
         self.cache_dir.join(format!("{provider}.json"))
@@ -70,7 +79,10 @@ impl Cache {
         tokio::fs::create_dir_all(&self.cache_dir)
             .await
             .with_context(|| {
-                format!("Failed to create cache directory: {}", self.cache_dir.display())
+                format!(
+                    "Failed to create cache directory: {}",
+                    self.cache_dir.display()
+                )
             })?;
 
         let entry = CacheEntry {
@@ -78,8 +90,8 @@ impl Cache {
             repos,
         };
 
-        let content = serde_json::to_string_pretty(&entry)
-            .context("Failed to serialize cache entry")?;
+        let content =
+            serde_json::to_string_pretty(&entry).context("Failed to serialize cache entry")?;
 
         let cache_file = self.cache_file(provider);
         tokio::fs::write(&cache_file, content)
@@ -94,9 +106,9 @@ impl Cache {
     pub async fn clear(&self, provider: &str) -> Result<()> {
         let cache_file = self.cache_file(provider);
         if cache_file.exists() {
-            tokio::fs::remove_file(&cache_file)
-                .await
-                .with_context(|| format!("Failed to remove cache file: {}", cache_file.display()))?;
+            tokio::fs::remove_file(&cache_file).await.with_context(|| {
+                format!("Failed to remove cache file: {}", cache_file.display())
+            })?;
         }
         Ok(())
     }
@@ -107,7 +119,12 @@ impl Cache {
         if self.cache_dir.exists() {
             tokio::fs::remove_dir_all(&self.cache_dir)
                 .await
-                .with_context(|| format!("Failed to remove cache directory: {}", self.cache_dir.display()))?;
+                .with_context(|| {
+                    format!(
+                        "Failed to remove cache directory: {}",
+                        self.cache_dir.display()
+                    )
+                })?;
         }
         Ok(())
     }
@@ -119,20 +136,21 @@ mod tests {
 
     #[tokio::test]
     async fn test_cache_roundtrip() {
-        let cache = Cache::new(60).unwrap();
-        let test_repos = vec![
-            Repo {
-                provider: "github".to_string(),
-                icon: "[GH]".to_string(),
-                name: "test/repo".to_string(),
-                language: Some("Rust".to_string()),
-                description: Some("Test repository".to_string()),
-                url: "https://github.com/test/repo".to_string(),
-                stars_today: Some(10),
-                stars_total: Some(100),
-                approximated: false,
-            },
-        ];
+        // Use temporary directory for testing
+        let temp_dir = std::env::temp_dir().join(format!("trotd-test-{}", Cache::now()));
+        let cache = Cache::with_dir(temp_dir.clone(), 60);
+
+        let test_repos = vec![Repo {
+            provider: "github".to_string(),
+            icon: "[GH]".to_string(),
+            name: "test/repo".to_string(),
+            language: Some("Rust".to_string()),
+            description: Some("Test repository".to_string()),
+            url: "https://github.com/test/repo".to_string(),
+            stars_today: Some(10),
+            stars_total: Some(100),
+            approximated: false,
+        }];
 
         // Clear any existing cache
         let _ = cache.clear("test-provider").await;
@@ -141,7 +159,10 @@ mod tests {
         assert!(cache.get("test-provider").await.is_none());
 
         // Save to cache
-        cache.set("test-provider", test_repos.clone()).await.unwrap();
+        cache
+            .set("test-provider", test_repos.clone())
+            .await
+            .unwrap();
 
         // Retrieve from cache
         let cached = cache.get("test-provider").await.unwrap();
@@ -150,25 +171,27 @@ mod tests {
 
         // Cleanup
         cache.clear("test-provider").await.unwrap();
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[tokio::test]
     async fn test_cache_expiry() {
+        // Use temporary directory for testing
+        let temp_dir = std::env::temp_dir().join(format!("trotd-test-{}", Cache::now()));
         // Create cache with 0 minute TTL (expires immediately)
-        let cache = Cache::new(0).unwrap();
-        let test_repos = vec![
-            Repo {
-                provider: "github".to_string(),
-                icon: "[GH]".to_string(),
-                name: "test/repo".to_string(),
-                language: Some("Rust".to_string()),
-                description: None,
-                url: "https://github.com/test/repo".to_string(),
-                stars_today: None,
-                stars_total: Some(50),
-                approximated: false,
-            },
-        ];
+        let cache = Cache::with_dir(temp_dir.clone(), 0);
+
+        let test_repos = vec![Repo {
+            provider: "github".to_string(),
+            icon: "[GH]".to_string(),
+            name: "test/repo".to_string(),
+            language: Some("Rust".to_string()),
+            description: None,
+            url: "https://github.com/test/repo".to_string(),
+            stars_today: None,
+            stars_total: Some(50),
+            approximated: false,
+        }];
 
         // Clear any existing cache
         let _ = cache.clear("test-expiry").await;
@@ -183,5 +206,6 @@ mod tests {
 
         // Cleanup
         let _ = cache.clear("test-expiry").await;
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

@@ -122,7 +122,9 @@ mod tests {
                 icon: "[GH]".to_string(),
                 name: "rust-lang/rust".to_string(),
                 language: Some("Rust".to_string()),
-                description: Some("Empowering everyone to build reliable and efficient software.".to_string()),
+                description: Some(
+                    "Empowering everyone to build reliable and efficient software.".to_string(),
+                ),
                 url: "https://github.com/rust-lang/rust".to_string(),
                 stars_today: Some(50),
                 stars_total: Some(90000),

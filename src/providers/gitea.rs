@@ -43,9 +43,7 @@ impl Gitea {
         let today = chrono::Utc::now().format("%Y-%m-%d").to_string();
 
         // Search for recently created repos, sorted by stars
-        let url = format!(
-            "{base_url}/api/v1/repos/search?sort=stars&order=desc&limit=50"
-        );
+        let url = format!("{base_url}/api/v1/repos/search?sort=stars&order=desc&limit=50");
 
         let response: GiteaSearchResponse = self.http.get_json(&url, token).await?;
 
@@ -80,10 +78,7 @@ impl Provider for Gitea {
         limit: usize,
         langs: &LanguageFilter,
     ) -> Result<Vec<Repo>> {
-        let base_url = cfg
-            .base_url
-            .as_deref()
-            .unwrap_or("https://gitea.com");
+        let base_url = cfg.base_url.as_deref().unwrap_or("https://gitea.com");
 
         let repositories = self.fetch_repos(base_url, cfg.token.as_deref()).await?;
 

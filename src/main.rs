@@ -13,7 +13,7 @@ mod render;
 use cache::Cache;
 use config::Config;
 use model::{LanguageFilter, Provider, ProviderCfg};
-use providers::{Gitea, GitHub, GitLab};
+use providers::{GitHub, GitLab, Gitea};
 use render::{render, OutputFormat};
 
 /// Trending repositories of the day - minimal MOTD CLI
@@ -154,7 +154,11 @@ async fn main() -> Result<()> {
 
             // Fetch from provider
             let repos = provider
-                .top_today(&provider_cfg, config_clone.general.max_per_provider, &lang_filter_clone)
+                .top_today(
+                    &provider_cfg,
+                    config_clone.general.max_per_provider,
+                    &lang_filter_clone,
+                )
                 .await?;
 
             // Cache the result

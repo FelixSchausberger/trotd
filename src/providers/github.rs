@@ -35,8 +35,11 @@ impl GitHub {
         language: Option<&str>,
         token: Option<&str>,
     ) -> Result<Vec<TrendingRepo>> {
-        let lang_param = language.map_or(String::new(), |l| format!("?language={l}"));
-        let url = format!("https://gh-trending-api.vicary.workers.dev/repositories{lang_param}&since=daily");
+        let url = if let Some(lang) = language {
+            format!("https://gh-trending-api.vicary.workers.dev/repositories?since=daily&language={lang}")
+        } else {
+            "https://gh-trending-api.vicary.workers.dev/repositories?since=daily".to_string()
+        };
 
         self.http.get_json(&url, token).await
     }

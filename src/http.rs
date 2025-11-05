@@ -24,11 +24,7 @@ impl HttpClient {
     }
 
     /// Fetch JSON data from URL with optional authentication token
-    pub async fn get_json<T: DeserializeOwned>(
-        &self,
-        url: &str,
-        token: Option<&str>,
-    ) -> Result<T> {
+    pub async fn get_json<T: DeserializeOwned>(&self, url: &str, token: Option<&str>) -> Result<T> {
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static("trotd/0.1.0"));
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));

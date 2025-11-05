@@ -261,12 +261,6 @@ Hooks run:
 
 MIT License - see [LICENSE](LICENSE) file
 
-## Acknowledgments
-
-Inspired by:
-- [vil2json](https://github.com/schausberger/corne-colemak-dh-eurkey/tree/main/tools/vil2json) - Clean single-binary Rust tool
-- [stethoscope](https://github.com/schausberger/stethoscope) - Workspace architecture and testing patterns
-
 ## Contributing
 
 Contributions welcome! Please:

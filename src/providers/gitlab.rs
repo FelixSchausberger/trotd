@@ -46,8 +46,20 @@ impl GitLab {
     fn extract_language(topics: &[String]) -> Option<String> {
         // Common programming language tags
         let languages = [
-            "rust", "go", "python", "javascript", "typescript", "java", "c", "cpp",
-            "csharp", "ruby", "php", "swift", "kotlin", "scala",
+            "rust",
+            "go",
+            "python",
+            "javascript",
+            "typescript",
+            "java",
+            "c",
+            "cpp",
+            "csharp",
+            "ruby",
+            "php",
+            "swift",
+            "kotlin",
+            "scala",
         ];
 
         topics
@@ -134,10 +146,7 @@ mod tests {
             GitLab::extract_language(&["web".to_string(), "python".to_string()]),
             Some("Python".to_string())
         );
-        assert_eq!(
-            GitLab::extract_language(&["web".to_string()]),
-            None
-        );
+        assert_eq!(GitLab::extract_language(&["web".to_string()]), None);
     }
 
     #[tokio::test]
