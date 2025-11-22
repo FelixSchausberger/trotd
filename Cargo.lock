@@ -2026,6 +2026,7 @@ dependencies = [
  "tokio",
  "tokio-retry",
  "toml",
+ "unicode-width",
 ]
 
 [[package]]

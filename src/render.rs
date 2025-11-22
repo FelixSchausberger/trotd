@@ -1,6 +1,7 @@
 use chrono::{Duration, Utc};
 use colored::Colorize;
 use serde_json::json;
+use unicode_width::{UnicodeWidthStr, UnicodeWidthChar};
 
 use crate::model::Repo;
 
@@ -29,14 +30,14 @@ fn render_motd(repos: &[Repo]) {
     // Calculate column widths for alignment
     let max_name_len = repos
         .iter()
-        .map(|r| r.name.chars().count())
+        .map(|r| r.name.width())
         .max()
         .unwrap_or(0)
         .min(40); // Cap name width at 40 chars
 
     let max_lang_len = repos
         .iter()
-        .filter_map(|r| r.language.as_ref().map(|l| l.chars().count()))
+        .filter_map(|r| r.language.as_ref().map(|l| l.width()))
         .max()
         .unwrap_or(0)
         .min(15); // Cap language width at 15 chars
@@ -135,8 +136,13 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
     };
 
     // Name (truncate if too long, pad for alignment)
-    let name_display = if repo.name.chars().count() > name_width {
-        let truncated: String = repo.name.chars().take(name_width - 2).collect();
+    let name_display = if repo.name.width() > name_width {
+        let mut total_width = 0;
+        let truncated: String = repo.name.chars().take_while(|c| {
+            let char_width = if c.is_ascii() { 1 } else { c.width().unwrap_or(1) };
+            total_width += char_width;
+            total_width <= name_width - 2
+        }).collect();
         format!("{truncated}..")
     } else {
         repo.name.clone()
@@ -146,8 +152,13 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
 
     // Language (pad for alignment)
     let lang_display = repo.language.as_deref().unwrap_or("-");
-    let lang_truncated = if lang_display.chars().count() > lang_width {
-        let truncated: String = lang_display.chars().take(lang_width - 2).collect();
+    let lang_truncated = if lang_display.width() > lang_width {
+        let mut total_width = 0;
+        let truncated: String = lang_display.chars().take_while(|c| {
+            let char_width = if c.is_ascii() { 1 } else { c.width().unwrap_or(1) };
+            total_width += char_width;
+            total_width <= lang_width - 2
+        }).collect();
         format!("{truncated}..")
     } else {
         lang_display.to_string()
@@ -177,8 +188,13 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
     // Description (truncate for remaining space)
     let desc = if let Some(ref d) = repo.description {
         let cleaned = clean_description(d);
-        if cleaned.chars().count() > 45 {
-            let truncated: String = cleaned.chars().take(42).collect();
+        if cleaned.width() > 45 {
+            let mut total_width = 0;
+            let truncated: String = cleaned.chars().take_while(|c| {
+                let char_width = if c.is_ascii() { 1 } else { c.width().unwrap_or(1) };
+                total_width += char_width;
+                total_width <= 42
+            }).collect();
             let final_text = clean_truncated_text(&truncated);
             format!("{final_text}...")
         } else {
