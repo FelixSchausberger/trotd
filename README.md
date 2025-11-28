@@ -10,9 +10,9 @@ Inspired by [github-trending-cli](https://github.com/psalias2006/github-trending
 
 <!-- EXAMPLE_OUTPUT_START -->
 ```
-[GE] gitea/gitea-mirror                Go ★7          today      Mirror of https://github.com/go-gitea/gitea
-[GH] google/adk-go                     Go ★131  today today      An open-source, code-first Go toolkit for...
-[GL] gitlab-com/content-sites/handbook -  ★129        today      The GitLab handbook, rendered with Hugo an...
+⚠ No repositories found for gitlab
+[GE] gitea/gitea-mirror Go ★7          today      Mirror of https://github.com/go-gitea/gitea
+[GH] google/adk-go      Go ★140  today today      An open-source, code-first Go toolkit for...
 ```
 <!-- EXAMPLE_OUTPUT_END -->
 
