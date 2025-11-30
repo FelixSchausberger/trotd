@@ -11,8 +11,8 @@ Inspired by [github-trending-cli](https://github.com/psalias2006/github-trending
 <!-- EXAMPLE_OUTPUT_START -->
 ```
 ⚠ No repositories found for gitlab
-[GE] gitea/blog    JavaScript ★25         today      Gitea: Blog
-[GH] google/adk-go Go         ★137  today today      An open-source, code-first Go toolkit for...
+[GE] gitea/gitea-mirror Go ★8          today      Mirror of https://github.com/go-gitea/gitea
+[GH] google/adk-go      Go ★96   today today      An open-source, code-first Go toolkit for...
 ```
 <!-- EXAMPLE_OUTPUT_END -->
 
