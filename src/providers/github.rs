@@ -44,7 +44,7 @@ impl GitHub {
         })
     }
 
-    /// Create a GitHub provider with a custom HttpClient
+    /// Create a GitHub provider with a custom `HttpClient`
     #[allow(dead_code)]
     pub fn with_client(http: HttpClient) -> Self {
         Self { http }
@@ -74,11 +74,11 @@ impl GitHub {
         };
 
         let html = self.http.get_html(&url).await?;
-        self.parse_trending_html(&html)
+        Self::parse_trending_html(&html)
     }
 
     /// Parse HTML from GitHub trending page
-    fn parse_trending_html(&self, html: &str) -> Result<Vec<TrendingRepo>> {
+    fn parse_trending_html(html: &str) -> Result<Vec<TrendingRepo>> {
         let document = Html::parse_document(html);
 
         // Selectors for extracting repository data
@@ -92,17 +92,18 @@ impl GitHub {
 
         for article in document.select(&article_selector) {
             // Extract repository name and URL
-            let name_elem = match article.select(&name_selector).next() {
-                Some(elem) => elem,
-                None => continue,
+            let Some(name_elem) = article.select(&name_selector).next() else {
+                continue;
             };
 
-            let href = match name_elem.value().attr("href") {
-                Some(h) => h,
-                None => continue,
+            let Some(href) = name_elem.value().attr("href") else {
+                continue;
             };
 
-            let name = name_elem.text().collect::<String>().trim()
+            let name = name_elem
+                .text()
+                .collect::<String>()
+                .trim()
                 .replace('\n', "")
                 .split_whitespace()
                 .collect::<Vec<_>>()
@@ -111,26 +112,36 @@ impl GitHub {
             let url = format!("https://github.com{href}");
 
             // Extract description
-            let description = article.select(&desc_selector)
+            let description = article
+                .select(&desc_selector)
                 .next()
                 .map(|e| e.text().collect::<String>().trim().to_string())
                 .filter(|s| !s.is_empty());
 
             // Extract language
-            let language = article.select(&lang_selector)
+            let language = article
+                .select(&lang_selector)
                 .next()
                 .map(|e| e.text().collect::<String>().trim().to_string());
 
             // Extract stars (today and total)
-            let stars_text: Vec<String> = article.select(&star_selector)
+            let stars_text: Vec<String> = article
+                .select(&star_selector)
                 .map(|e| e.text().collect::<String>().trim().to_string())
                 .collect();
 
-            let stars_total = stars_text.iter()
+            let stars_total = stars_text
+                .iter()
                 .find(|s| !s.contains("stars today"))
-                .and_then(|s| s.replace(',', "").split_whitespace().next().and_then(|n| n.parse().ok()));
+                .and_then(|s| {
+                    s.replace(',', "")
+                        .split_whitespace()
+                        .next()
+                        .and_then(|n| n.parse().ok())
+                });
 
-            let stars_today = stars_text.iter()
+            let stars_today = stars_text
+                .iter()
                 .find(|s| s.contains("stars today"))
                 .and_then(|s| {
                     let parts: Vec<&str> = s.split_whitespace().collect();
@@ -169,6 +180,7 @@ impl Provider for GitHub {
     async fn top_today(
         &self,
         cfg: &ProviderCfg,
+        offset: usize,
         limit: usize,
         langs: &LanguageFilter,
     ) -> Result<Vec<Repo>> {
@@ -185,11 +197,12 @@ impl Provider for GitHub {
                     }
                     // Filter by excluded topics
                     !r.topics.iter().any(|topic| {
-                        cfg.exclude_topics.iter().any(|excluded| {
-                            topic.eq_ignore_ascii_case(excluded)
-                        })
+                        cfg.exclude_topics
+                            .iter()
+                            .any(|excluded| topic.eq_ignore_ascii_case(excluded))
                     })
                 })
+                .skip(offset)
                 .take(limit)
                 .map(|r| {
                     let last_activity = chrono::DateTime::parse_from_rfc3339(&r.updated_at)
@@ -207,6 +220,7 @@ impl Provider for GitHub {
                         stars_total: Some(r.stargazers_count),
                         last_activity,
                         topics: r.topics,
+                        is_starred: false,
                     }
                 })
                 .collect();
@@ -231,6 +245,7 @@ impl Provider for GitHub {
         let repos = trending
             .into_iter()
             .filter(|r| langs.matches(r.language.as_ref()))
+            .skip(offset)
             .take(limit)
             .map(|r| Repo {
                 provider: self.id().to_string(),
@@ -243,10 +258,60 @@ impl Provider for GitHub {
                 stars_total: r.stars_total,
                 last_activity: Some(chrono::Utc::now()), // GitHub trending = active today
                 topics: r.topics,
+                is_starred: false,
             })
             .collect();
 
         Ok(repos)
+    }
+}
+
+impl GitHub {
+    /// Star a repository on GitHub
+    pub async fn star_repo(&self, owner: &str, repo: &str, token: &str) -> Result<()> {
+        let url = format!("https://api.github.com/user/starred/{owner}/{repo}");
+        self.http.put(&url, Some(token)).await?;
+        Ok(())
+    }
+
+    /// Check if a repository is starred
+    #[allow(dead_code)]
+    pub async fn check_starred(&self, owner: &str, repo: &str, token: &str) -> Result<bool> {
+        let url = format!("https://api.github.com/user/starred/{owner}/{repo}");
+        self.http.head(&url, Some(token)).await
+    }
+
+    /// Get all starred repositories for the authenticated user
+    pub async fn get_user_stars(&self, token: &str) -> Result<Vec<String>> {
+        #[derive(Deserialize)]
+        struct StarredRepo {
+            full_name: String,
+        }
+
+        let mut all_repos = Vec::new();
+        let mut page = 1;
+        let per_page = 100;
+
+        loop {
+            let url =
+                format!("https://api.github.com/user/starred?per_page={per_page}&page={page}");
+
+            let repos: Vec<StarredRepo> = self.http.get_json(&url, Some(token)).await?;
+
+            if repos.is_empty() {
+                break;
+            }
+
+            all_repos.extend(repos.into_iter().map(|r| r.full_name));
+            page += 1;
+
+            // Safety limit to avoid infinite loops
+            if page > 50 {
+                break;
+            }
+        }
+
+        Ok(all_repos)
     }
 }
 
@@ -280,7 +345,7 @@ mod tests {
         let filter = LanguageFilter::new(vec![]);
 
         // Try to fetch, but don't fail the test if API is down
-        match github.top_today(&cfg, 3, &filter).await {
+        match github.top_today(&cfg, 0, 3, &filter).await {
             Ok(repos) => {
                 // Verify structure if API call succeeds
                 for repo in repos {

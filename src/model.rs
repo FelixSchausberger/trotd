@@ -16,6 +16,8 @@ pub struct Repo {
     pub last_activity: Option<DateTime<Utc>>,
     #[serde(default)]
     pub topics: Vec<String>,
+    #[serde(default)]
+    pub is_starred: bool,
 }
 
 /// Configuration for provider behavior
@@ -24,7 +26,7 @@ pub struct ProviderCfg {
     #[allow(dead_code)]
     pub timeout_secs: u64,
     pub token: Option<String>,
-    pub base_url: Option<String>, // For Gitea
+    pub base_url: Option<String>,    // For Gitea
     pub exclude_topics: Vec<String>, // For GitHub
 }
 
@@ -61,10 +63,13 @@ pub trait Provider: Send + Sync {
     /// Provider icon for display (e.g., "[GH]")
     fn icon(&self) -> &'static str;
 
-    /// Fetch top repositories of the day
+    /// Fetch top repositories of the day with pagination support
+    /// offset: Starting position in the trending list (0-indexed)
+    /// limit: Number of repos to fetch from that position
     async fn top_today(
         &self,
         cfg: &ProviderCfg,
+        offset: usize,
         limit: usize,
         langs: &LanguageFilter,
     ) -> anyhow::Result<Vec<Repo>>;

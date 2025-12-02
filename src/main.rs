@@ -1,9 +1,10 @@
-use anyhow::{Context, Result};
+use anyhow::{anyhow, Context, Result};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::io;
 use std::sync::Arc;
+use std::time::Duration;
 
 mod cache;
 mod config;
@@ -11,16 +12,24 @@ mod http;
 mod model;
 mod providers;
 mod render;
+mod seen;
+mod starred;
 
 use cache::Cache;
 use config::Config;
 use model::{LanguageFilter, Provider, ProviderCfg};
 use providers::{GitHub, GitLab, Gitea};
 use render::{render, OutputFormat};
+use seen::SeenTracker;
+use starred::StarredCache;
+
+const PROVIDER_SLOW_WARN_SECS: u64 = 10;
+const PROVIDER_FETCH_TIMEOUT_SECS: u64 = 30;
 
 /// Trending repositories of the day - minimal MOTD CLI
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
+#[allow(clippy::struct_excessive_bools)]
 struct Args {
     #[command(subcommand)]
     command: Option<Commands>,
@@ -54,8 +63,17 @@ struct Args {
     min_stars: Option<u32>,
 
     /// Exclude GitHub repositories with these topics (comma-separated)
-    #[arg(long = "exclude-topics", value_name = "LIST", value_delimiter = ',', global = true)]
+    #[arg(
+        long = "exclude-topics",
+        value_name = "LIST",
+        value_delimiter = ',',
+        global = true
+    )]
     exclude_topics: Option<Vec<String>>,
+
+    /// Show all repositories including those already seen today
+    #[arg(long = "show-all", global = true)]
+    show_all: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -65,6 +83,16 @@ enum Commands {
         /// Shell to generate completions for
         #[arg(value_enum)]
         shell: Shell,
+    },
+    /// Star a GitHub repository
+    Star {
+        /// Repository to star (format: owner/repo)
+        repo: String,
+    },
+    /// Clone a trending repository
+    Clone {
+        /// Repository to clone (format: owner/repo or URL)
+        repo: String,
     },
 }
 
@@ -81,6 +109,12 @@ async fn main() -> Result<()> {
                 let bin_name = cmd.get_name().to_string();
                 generate(shell, &mut cmd, bin_name, &mut io::stdout());
                 return Ok(());
+            }
+            Commands::Star { repo } => {
+                return handle_star_command(&repo).await;
+            }
+            Commands::Clone { repo } => {
+                return handle_clone_command(&repo);
             }
         }
     }
@@ -127,7 +161,10 @@ async fn main() -> Result<()> {
     } else {
         let c = Cache::new(config.general.cache_ttl_mins).context("Failed to initialize cache")?;
         if verbose {
-            eprintln!("💾 Cache initialized (TTL: {} mins)", config.general.cache_ttl_mins);
+            eprintln!(
+                "💾 Cache initialized (TTL: {} mins)",
+                config.general.cache_ttl_mins
+            );
         }
         Some(c)
     };
@@ -149,7 +186,7 @@ async fn main() -> Result<()> {
     };
 
     if verbose {
-        eprintln!("🔌 Enabled providers: {:?}", enabled_providers);
+        eprintln!("🔌 Enabled providers: {enabled_providers:?}");
     }
 
     // Build provider instances
@@ -160,7 +197,10 @@ async fn main() -> Result<()> {
             "github" => match GitHub::new(config.general.github_timeout_secs) {
                 Ok(gh) => {
                     if verbose {
-                        eprintln!("  ✓ GitHub provider initialized (timeout: {}s)", config.general.github_timeout_secs);
+                        eprintln!(
+                            "  ✓ GitHub provider initialized (timeout: {}s)",
+                            config.general.github_timeout_secs
+                        );
                     }
                     provider_instances.push(("github".to_string(), Box::new(gh)));
                 }
@@ -169,7 +209,10 @@ async fn main() -> Result<()> {
             "gitlab" => match GitLab::new(config.general.gitlab_timeout_secs) {
                 Ok(gl) => {
                     if verbose {
-                        eprintln!("  ✓ GitLab provider initialized (timeout: {}s)", config.general.gitlab_timeout_secs);
+                        eprintln!(
+                            "  ✓ GitLab provider initialized (timeout: {}s)",
+                            config.general.gitlab_timeout_secs
+                        );
                     }
                     provider_instances.push(("gitlab".to_string(), Box::new(gl)));
                 }
@@ -178,7 +221,10 @@ async fn main() -> Result<()> {
             "gitea" => match Gitea::new(config.general.gitea_timeout_secs) {
                 Ok(ge) => {
                     if verbose {
-                        eprintln!("  ✓ Gitea provider initialized (timeout: {}s)", config.general.gitea_timeout_secs);
+                        eprintln!(
+                            "  ✓ Gitea provider initialized (timeout: {}s)",
+                            config.general.gitea_timeout_secs
+                        );
                     }
                     provider_instances.push(("gitea".to_string(), Box::new(ge)));
                 }
@@ -195,72 +241,142 @@ async fn main() -> Result<()> {
     // Create language filter
     let lang_filter = LanguageFilter::new(config.general.language_filter.clone());
 
-    if verbose {
-        if config.general.language_filter.is_empty() {
+    if config.general.language_filter.is_empty() {
+        if verbose {
             eprintln!("🌐 Language filter: all languages");
-        } else {
-            eprintln!("🌐 Language filter: {:?}", config.general.language_filter);
         }
+    } else if verbose {
+        eprintln!("🌐 Language filter: {:?}", config.general.language_filter);
+    }
+
+    if verbose {
         eprintln!("🚀 Fetching repositories...");
     }
+
+    // Initialize seen tracker unless --show-all is set
+    let seen_tracker = if args.show_all {
+        None
+    } else {
+        match SeenTracker::new() {
+            Ok(tracker) => Some(tracker),
+            Err(e) => {
+                if verbose {
+                    eprintln!("⚠ Failed to initialize seen tracker: {e}");
+                }
+                None
+            }
+        }
+    };
+
+    // Get fetch offset for pagination
+    let fetch_offset = if let Some(tracker) = &seen_tracker {
+        tracker.get_fetch_offset().await
+    } else {
+        0
+    };
+
+    if verbose && fetch_offset > 0 {
+        eprintln!("📖 Starting from position {fetch_offset} in trending list");
+    }
+
+    let prefer_cache_first = seen_tracker.is_none();
 
     // Fetch repositories in parallel
     let cache_arc = Arc::new(cache);
     let mut futures = FuturesUnordered::new();
 
     for (provider_id, provider) in provider_instances {
-        let cache_ref = Arc::clone(&cache_arc);
+        let cache_prefetch = Arc::clone(&cache_arc);
+        let cache_fetch = Arc::clone(&cache_arc);
+        let cache_fallback = Arc::clone(&cache_arc);
         let lang_filter_clone = lang_filter.clone();
         let config_clone = config.clone();
         let verbose_clone = verbose;
+        let offset_clone = fetch_offset;
+        let provider_name = provider_id.clone();
+        let provider_key = provider_id.clone();
+        let prefer_cached = prefer_cache_first;
 
         let future = async move {
-            // Try cache first
-            if let Some(ref cache) = *cache_ref {
-                if let Some(cached_repos) = cache.get(&provider_id).await {
-                    if verbose_clone {
-                        eprintln!("  💾 {} (cached)", provider_id);
+            if prefer_cached {
+                if let Some(ref cache) = *cache_prefetch {
+                    if let Some(cached_repos) = cache.get(&provider_key).await {
+                        if verbose_clone {
+                            eprintln!("  💾 {provider_key} (cached)");
+                        }
+                        return Ok((provider_key, cached_repos));
                     }
-                    return Ok((provider_id.clone(), cached_repos));
                 }
             }
 
-            // Build provider config
-            let provider_cfg = ProviderCfg {
-                timeout_secs: config_clone.general.timeout_secs,
-                token: match provider_id.as_str() {
-                    "github" => config_clone.auth.github_token.clone(),
-                    "gitlab" => config_clone.auth.gitlab_token.clone(),
-                    "gitea" => config_clone.auth.gitea_token.clone(),
-                    _ => None,
-                },
-                base_url: if provider_id == "gitea" {
-                    Some(config_clone.gitea.base_url.clone())
-                } else {
-                    None
-                },
-                exclude_topics: if provider_id == "github" {
-                    config_clone.github.exclude_topics.clone()
-                } else {
-                    vec![]
-                },
+            let fetch_future = async move {
+                let provider_cfg = ProviderCfg {
+                    timeout_secs: config_clone.general.timeout_secs,
+                    token: match provider_id.as_str() {
+                        "github" => config_clone.auth.github_token.clone(),
+                        "gitlab" => config_clone.auth.gitlab_token.clone(),
+                        "gitea" => config_clone.auth.gitea_token.clone(),
+                        _ => None,
+                    },
+                    base_url: if provider_id == "gitea" {
+                        Some(config_clone.gitea.base_url.clone())
+                    } else {
+                        None
+                    },
+                    exclude_topics: if provider_id == "github" {
+                        config_clone.github.exclude_topics.clone()
+                    } else {
+                        vec![]
+                    },
+                };
+
+                let repos = provider
+                    .top_today(
+                        &provider_cfg,
+                        offset_clone,
+                        config_clone.get_max_entries(&provider_id),
+                        &lang_filter_clone,
+                    )
+                    .await?;
+
+                if let Some(ref cache) = *cache_fetch {
+                    let _ = cache.set(&provider_id, repos.clone()).await;
+                }
+
+                Ok::<_, anyhow::Error>((provider_id, repos))
             };
 
-            // Fetch from provider
-            let repos = provider
-                .top_today(
-                    &provider_cfg,
-                    config_clone.get_max_entries(&provider_id),
-                    &lang_filter_clone,
-                )
-                .await?;
+            tokio::pin!(fetch_future);
+            let slow_notice = tokio::time::sleep(Duration::from_secs(PROVIDER_SLOW_WARN_SECS));
+            tokio::pin!(slow_notice);
+            let mut warned = false;
 
-            // Cache the result
-            if let Some(ref cache) = *cache_ref {
-                let _ = cache.set(&provider_id, repos.clone()).await;
+            let monitored = async {
+                loop {
+                    tokio::select! {
+                        result = &mut fetch_future => break result,
+                        () = &mut slow_notice, if !warned => {
+                            warned = true;
+                            eprintln!("⏳ Still fetching {provider_name}...");
+                            if let Some(ref cache) = *cache_fallback {
+                                if let Some(cached_repos) = cache.get(&provider_key).await {
+                                    eprintln!("⚠ Using cached {provider_name} results while network call finishes...");
+                                    return Ok((provider_key.clone(), cached_repos));
+                                }
+                            }
+                        }
+                    }
+                }
+            };
+
+            match tokio::time::timeout(Duration::from_secs(PROVIDER_FETCH_TIMEOUT_SECS), monitored)
+                .await
+            {
+                Ok(res) => res,
+                Err(_) => Err(anyhow!(
+                    "{provider_name} provider timed out after {PROVIDER_FETCH_TIMEOUT_SECS}s"
+                )),
             }
-
-            Ok::<_, anyhow::Error>((provider_id, repos))
         };
 
         futures.push(future);
@@ -269,6 +385,7 @@ async fn main() -> Result<()> {
     // Collect results
     let mut all_repos = Vec::new();
     let mut errors = Vec::new();
+    let mut no_new_repos = false;
 
     while let Some(result) = futures.next().await {
         match result {
@@ -298,15 +415,36 @@ async fn main() -> Result<()> {
         }
     }
 
-    // If all providers failed and we have no repos, exit with error
     if all_repos.is_empty() && !errors.is_empty() {
         anyhow::bail!("All providers failed");
+    }
+
+    // Filter out previously seen repos when tracking is enabled
+    if let Some(tracker) = &seen_tracker {
+        let before_count = all_repos.len();
+        match tracker.filter_unseen(&all_repos).await {
+            Ok(filtered) => {
+                let removed = before_count.saturating_sub(filtered.len());
+                if verbose && removed > 0 {
+                    eprintln!("👀 Seen filter: skipped {removed} repos shown earlier today");
+                }
+                if filtered.is_empty() && before_count > 0 {
+                    no_new_repos = true;
+                }
+                all_repos = filtered;
+            }
+            Err(e) => {
+                if verbose {
+                    eprintln!("⚠ Failed to filter seen repos: {e}");
+                }
+            }
+        }
     }
 
     // Apply ASCII-only filter if enabled
     if config.general.ascii_only {
         let before_count = all_repos.len();
-        all_repos.retain(|repo| is_mostly_ascii(repo));
+        all_repos.retain(is_mostly_ascii);
         if verbose {
             let filtered_count = before_count - all_repos.len();
             eprintln!("🔤 ASCII filter: removed {filtered_count} non-ASCII repos");
@@ -327,8 +465,83 @@ async fn main() -> Result<()> {
         eprintln!("📊 Total repositories: {}", all_repos.len());
     }
 
+    if no_new_repos {
+        eprintln!(
+            "👀 All fetched repositories were already shown today. Use --show-all to repeat them."
+        );
+    }
+
+    // Apply starred status if enabled and GitHub token available
+    if config.general.show_starred_status && config.auth.github_token.is_some() {
+        if let Ok(starred_cache) = StarredCache::new() {
+            // Try to use cached starred list
+            let starred_set = if let Some(cached) = starred_cache.get_starred().await {
+                if verbose {
+                    eprintln!("⭐ Using cached starred status ({} repos)", cached.len());
+                }
+                cached
+            } else if let Some(ref token) = config.auth.github_token {
+                // Fetch fresh starred list if not cached
+                if verbose {
+                    eprintln!("⭐ Fetching starred repositories...");
+                }
+                if let Ok(github) = GitHub::new(config.general.github_timeout_secs) {
+                    if let Ok(starred_repos) = github.get_user_stars(token).await {
+                        let starred_set: std::collections::HashSet<String> =
+                            starred_repos.into_iter().collect();
+                        if verbose {
+                            eprintln!("⭐ Found {} starred repos", starred_set.len());
+                        }
+                        let _ = starred_cache.save_starred(starred_set.clone()).await;
+                        starred_set
+                    } else {
+                        std::collections::HashSet::new()
+                    }
+                } else {
+                    std::collections::HashSet::new()
+                }
+            } else {
+                std::collections::HashSet::new()
+            };
+
+            // Mark starred repos
+            for repo in &mut all_repos {
+                if repo.provider == "github" {
+                    repo.is_starred = starred_set.contains(&repo.name);
+                }
+            }
+        }
+    }
+
     // Render output
     render(&all_repos, format);
+
+    // Record seen repos and increment offset for next run when tracking is enabled
+    if let Some(tracker) = &seen_tracker {
+        if !all_repos.is_empty() {
+            if let Err(e) = tracker.mark_seen(&all_repos).await {
+                if verbose {
+                    eprintln!("⚠ Failed to record seen repos: {e}");
+                }
+            }
+
+            match tracker.increment_fetch_offset(all_repos.len()).await {
+                Ok(()) => {
+                    if verbose {
+                        eprintln!(
+                            "📈 Next run will start from position {}",
+                            fetch_offset + all_repos.len()
+                        );
+                    }
+                }
+                Err(e) => {
+                    if verbose {
+                        eprintln!("⚠ Failed to update fetch offset: {e}");
+                    }
+                }
+            }
+        }
+    }
 
     Ok(())
 }
@@ -353,11 +566,70 @@ fn is_mostly_ascii(repo: &model::Repo) -> bool {
 }
 
 /// Calculate the ratio of ASCII characters in a string
+#[allow(clippy::cast_precision_loss)]
 fn ascii_ratio(s: &str) -> f64 {
     if s.is_empty() {
         return 1.0;
     }
     let total_chars = s.chars().count();
-    let ascii_chars = s.chars().filter(|c| c.is_ascii()).count();
+    let ascii_chars = s.chars().filter(char::is_ascii).count();
     ascii_chars as f64 / total_chars as f64
+}
+
+/// Handle the star subcommand
+async fn handle_star_command(repo: &str) -> Result<()> {
+    let config = Config::load().context("Failed to load configuration")?;
+
+    let token = config.auth.github_token.as_ref().context(
+        "GitHub token not configured. Set TROTD_GITHUB_TOKEN or add github_token to config file.",
+    )?;
+
+    // Parse repo name (format: owner/repo)
+    let parts: Vec<&str> = repo.split('/').collect();
+    if parts.len() != 2 {
+        anyhow::bail!("Invalid repository format. Expected: owner/repo");
+    }
+    let (owner, repo_name) = (parts[0], parts[1]);
+
+    eprintln!("⭐ Starring {owner}/{repo_name} on GitHub...");
+
+    let github = GitHub::new(config.general.github_timeout_secs)?;
+    github.star_repo(owner, repo_name, token).await?;
+
+    println!("✓ Successfully starred {owner}/{repo_name}");
+
+    // Invalidate starred cache
+    if let Ok(starred_cache) = StarredCache::new() {
+        let _ = starred_cache.clear().await;
+    }
+
+    Ok(())
+}
+
+/// Handle the clone subcommand
+fn handle_clone_command(repo: &str) -> Result<()> {
+    // Support both "owner/repo" format and full URLs
+    let clone_url = if repo.starts_with("http://") || repo.starts_with("https://") {
+        repo.to_string()
+    } else {
+        // Assume GitHub by default for owner/repo format
+        format!("https://github.com/{repo}.git")
+    };
+
+    eprintln!("📦 Cloning {clone_url}...");
+
+    // Use git clone command
+    let output = std::process::Command::new("git")
+        .arg("clone")
+        .arg(&clone_url)
+        .output()
+        .context("Failed to execute git clone. Is git installed?")?;
+
+    if output.status.success() {
+        println!("✓ Successfully cloned {repo}");
+        Ok(())
+    } else {
+        let error = String::from_utf8_lossy(&output.stderr);
+        anyhow::bail!("Git clone failed: {error}");
+    }
 }

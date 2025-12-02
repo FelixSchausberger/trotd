@@ -43,6 +43,10 @@ pub struct GeneralConfig {
     pub ascii_only: bool,
     #[serde(default)]
     pub min_stars: Option<u32>,
+    #[serde(default = "default_fast_network_timeout_secs")]
+    pub fast_network_timeout_secs: u64,
+    #[serde(default = "default_true")]
+    pub show_starred_status: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,6 +94,8 @@ impl Default for GeneralConfig {
             gitea_timeout_secs: default_gitea_timeout_secs(),
             ascii_only: false,
             min_stars: None,
+            fast_network_timeout_secs: default_fast_network_timeout_secs(),
+            show_starred_status: true,
         }
     }
 }
@@ -140,6 +146,10 @@ fn default_gitea_url() -> String {
     "https://gitea.com".to_string()
 }
 
+fn default_fast_network_timeout_secs() -> u64 {
+    3
+}
+
 fn default_true() -> bool {
     true
 }
@@ -188,8 +198,9 @@ impl Config {
             if !config_path.exists() {
                 // Create directory if needed
                 if let Some(parent) = config_path.parent() {
-                    std::fs::create_dir_all(parent)
-                        .with_context(|| format!("Failed to create config directory: {}", parent.display()))?;
+                    std::fs::create_dir_all(parent).with_context(|| {
+                        format!("Failed to create config directory: {}", parent.display())
+                    })?;
                 }
 
                 // Create default config
@@ -197,10 +208,14 @@ impl Config {
                 let toml_content = toml::to_string_pretty(&default_config)
                     .context("Failed to serialize default config")?;
 
-                std::fs::write(&config_path, toml_content)
-                    .with_context(|| format!("Failed to write default config: {}", config_path.display()))?;
+                std::fs::write(&config_path, toml_content).with_context(|| {
+                    format!("Failed to write default config: {}", config_path.display())
+                })?;
 
-                eprintln!("ℹ No config file found. Created default configuration at: {}", config_path.display());
+                eprintln!(
+                    "ℹ No config file found. Created default configuration at: {}",
+                    config_path.display()
+                );
                 eprintln!("  Edit this file to customize trotd settings.");
             }
         }
@@ -395,13 +410,13 @@ mod tests {
 
     #[test]
     fn test_config_parsing_with_per_provider_limits() {
-        let toml_str = r#"
+        let toml_str = r"
             [general]
             max_per_provider = 2
             github_max_entries = 3
             gitlab_max_entries = 1
             gitea_max_entries = 1
-        "#;
+        ";
 
         let config: Config = toml::from_str(toml_str).unwrap();
         assert_eq!(config.get_max_entries("github"), 3);
@@ -409,4 +424,3 @@ mod tests {
         assert_eq!(config.get_max_entries("gitea"), 1);
     }
 }
-

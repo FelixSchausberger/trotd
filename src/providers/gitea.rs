@@ -32,7 +32,7 @@ impl Gitea {
         })
     }
 
-    /// Create a Gitea provider with a custom HttpClient
+    /// Create a Gitea provider with a custom `HttpClient`
     #[allow(dead_code)]
     pub fn with_client(http: HttpClient) -> Self {
         Self { http }
@@ -73,6 +73,7 @@ impl Provider for Gitea {
     async fn top_today(
         &self,
         cfg: &ProviderCfg,
+        offset: usize,
         limit: usize,
         langs: &LanguageFilter,
     ) -> Result<Vec<Repo>> {
@@ -83,6 +84,7 @@ impl Provider for Gitea {
         let repos = repositories
             .into_iter()
             .filter(|r| langs.matches(r.language.as_ref()))
+            .skip(offset)
             .take(limit)
             .map(|r| {
                 let last_activity = r
@@ -101,6 +103,7 @@ impl Provider for Gitea {
                     stars_total: r.stars_count,
                     last_activity,
                     topics: vec![], // Gitea API doesn't provide topics in search
+                    is_starred: false,
                 }
             })
             .collect();
@@ -138,7 +141,7 @@ mod tests {
         let filter = LanguageFilter::new(vec![]);
 
         // Try to fetch, but don't fail the test if API is down
-        match gitea.top_today(&cfg, 3, &filter).await {
+        match gitea.top_today(&cfg, 0, 3, &filter).await {
             Ok(repos) => {
                 // Verify structure if API call succeeds
                 for repo in repos {

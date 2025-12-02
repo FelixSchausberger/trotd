@@ -101,7 +101,7 @@ fn clean_truncated_text(text: &str) -> String {
     result
 }
 
-/// Format recency from last_activity timestamp
+/// Format recency from `last_activity` timestamp
 fn format_recency(repo: &Repo) -> String {
     match repo.last_activity {
         Some(dt) => {
@@ -134,6 +134,13 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
         _ => repo.icon.white(),
     };
 
+    // Starred indicator
+    let starred_indicator = if repo.is_starred {
+        "⭐".to_string()
+    } else {
+        "  ".to_string()
+    };
+
     // Name (truncate if too long, pad for alignment)
     let name_display = if repo.name.chars().count() > name_width {
         let truncated: String = repo.name.chars().take(name_width - 2).collect();
@@ -141,7 +148,7 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
     } else {
         repo.name.clone()
     };
-    let name_padded = format!("{:<width$}", name_display, width = name_width);
+    let name_padded = format!("{name_display:<name_width$}");
     let name = name_padded.bright_cyan().bold();
 
     // Language (pad for alignment)
@@ -152,16 +159,16 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
     } else {
         lang_display.to_string()
     };
-    let lang_padded = format!("{:<width$}", lang_truncated, width = lang_width);
+    let lang_padded = format!("{lang_truncated:<lang_width$}");
     let lang = lang_padded.bright_yellow();
 
     // Stars
     let stars = if let Some(stars_today) = repo.stars_today {
-        format!("★{:<4} today", stars_today).bright_green().to_string()
-    } else if let Some(stars_total) = repo.stars_total {
-        format!("★{:<10}", stars_total)
-            .bright_black()
+        format!("★{stars_today:<4} today")
+            .bright_green()
             .to_string()
+    } else if let Some(stars_total) = repo.stars_total {
+        format!("★{stars_total:<10}").bright_black().to_string()
     } else {
         format!("{:<11}", "").to_string()
     };
@@ -189,13 +196,9 @@ fn render_repo_motd(repo: &Repo, name_width: usize, lang_width: usize) {
     };
 
     // Print aligned columns
+    let recency_padded = format!("{recency_colored:<10}");
     println!(
-        "{} {} {} {} {} {}",
-        icon,
-        name,
-        lang,
-        stars,
-        format!("{:<10}", recency_colored),
+        "{starred_indicator}{icon} {name} {lang} {stars} {recency_padded} {}",
         desc.white()
     );
 }
@@ -230,6 +233,7 @@ mod tests {
             stars_total: Some(100),
             last_activity: Some(Utc::now()),
             topics: vec!["rust".to_string(), "cli".to_string()],
+            is_starred: false,
         }];
 
         render(&repos, OutputFormat::Json);
@@ -251,6 +255,7 @@ mod tests {
                 stars_total: Some(90000),
                 last_activity: Some(Utc::now()),
                 topics: vec!["rust".to_string(), "compiler".to_string()],
+                is_starred: true,
             },
             Repo {
                 provider: "gitlab".to_string(),
@@ -263,6 +268,7 @@ mod tests {
                 stars_total: Some(5000),
                 last_activity: Some(Utc::now() - Duration::days(3)),
                 topics: vec!["gitlab".to_string(), "ruby".to_string()],
+                is_starred: false,
             },
         ];
 
@@ -328,4 +334,3 @@ mod tests {
         assert_eq!(cleaned, "Check [docs](url) here");
     }
 }
-

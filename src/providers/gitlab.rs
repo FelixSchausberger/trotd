@@ -30,7 +30,7 @@ impl GitLab {
         })
     }
 
-    /// Create a GitLab provider with a custom HttpClient
+    /// Create a GitLab provider with a custom `HttpClient`
     #[allow(dead_code)]
     pub fn with_client(http: HttpClient) -> Self {
         Self { http }
@@ -123,6 +123,7 @@ impl Provider for GitLab {
     async fn top_today(
         &self,
         cfg: &ProviderCfg,
+        offset: usize,
         limit: usize,
         langs: &LanguageFilter,
     ) -> Result<Vec<Repo>> {
@@ -135,6 +136,7 @@ impl Provider for GitLab {
                 (p, language)
             })
             .filter(|(_, lang)| langs.matches(lang.as_ref()))
+            .skip(offset)
             .take(limit)
             .map(|(p, language)| {
                 let last_activity = p
@@ -153,6 +155,7 @@ impl Provider for GitLab {
                     stars_total: p.star_count,
                     last_activity,
                     topics: p.topics,
+                    is_starred: false,
                 }
             })
             .collect();
@@ -206,7 +209,7 @@ mod tests {
         let filter = LanguageFilter::new(vec![]);
 
         // Try to fetch, but don't fail the test if API is down
-        match gitlab.top_today(&cfg, 3, &filter).await {
+        match gitlab.top_today(&cfg, 3, 3, &filter).await {
             Ok(repos) => {
                 // Verify structure if API call succeeds
                 for repo in repos {

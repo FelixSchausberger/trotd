@@ -151,6 +151,7 @@ mod tests {
             stars_total: Some(100),
             last_activity: Some(chrono::Utc::now()),
             topics: vec!["rust".to_string(), "cli".to_string()],
+            is_starred: false,
         }];
 
         // Clear any existing cache
@@ -193,6 +194,7 @@ mod tests {
             stars_total: Some(50),
             last_activity: Some(chrono::Utc::now()),
             topics: vec![],
+            is_starred: false,
         }];
 
         // Clear any existing cache

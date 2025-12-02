@@ -1,8 +1,8 @@
-# trotd
+# git trending
 
 > **Trending repositories of the day** - minimal MOTD CLI
 
-A lightweight CLI tool that prints a Message of the Day (MOTD) with the top trending repositories from GitHub, GitLab, and Gitea.
+A lightweight CLI tool that prints a Message of the Day (MOTD) with the top trending repositories from GitHub, GitLab, and Gitea. Use as `git trending` command.
 
 Inspired by [github-trending-cli](https://github.com/psalias2006/github-trending-cli).
 
@@ -18,6 +18,7 @@ Inspired by [github-trending-cli](https://github.com/psalias2006/github-trending
 
 **Legend:**
 - `[GH]` = GitHub, `[GL]` = GitLab, `[GE]` = Gitea
+- `⭐` = You have starred this repository (requires GitHub token)
 - `★N today` = Stars gained today
 - `★N` = Total stars (when daily stars unavailable)
 - `~` = Approximated (not from official trending API)
@@ -29,12 +30,20 @@ Inspired by [github-trending-cli](https://github.com/psalias2006/github-trending
 - **Multi-provider support**: GitHub, GitLab, Gitea (configurable base URL)
 - **Parallel fetching**: Concurrent API calls with configurable timeout
 - **Smart caching**: Filesystem-based cache with TTL (XDG-compliant)
+- **Memory system**: Daily-reset tracking - see new repos each terminal session
+- **Network resilience**: Gracefully falls back to cached data when offline
 - **Flexible configuration**: TOML config, environment variables, CLI flags
 - **Advanced filtering**:
   - Language filtering (e.g., `--lang rust,go`)
   - Star threshold filtering (e.g., `--min-stars 100`)
   - Topic exclusion for GitHub (e.g., `--exclude-topics awesome`)
-- **Beautiful output**: Colored terminal output with nerd font icons
+  - Automatic filtering of already-seen repos (resets daily)
+- **GitHub integration**:
+  - Star repositories from the CLI
+  - Visual indicators for already-starred repos
+  - Quick clone trending repositories
+- **Git extension**: Works as `git trending` command (git automatically detects git-* binaries)
+- **Beautiful output**: Colored terminal output with starred indicators
 - **JSON export**: Optional JSON output for scripting
 - **Shell completions**: Generate completions for Bash, Fish, Zsh, PowerShell
 - **MOTD Integration**: Easy integration as Message of the Day
@@ -47,6 +56,8 @@ Inspired by [github-trending-cli](https://github.com/psalias2006/github-trending
 git clone https://github.com/schausberger/trotd
 cd trotd
 cargo install --path .
+
+# Now you can use: git trending
 ```
 
 ### With Nix
@@ -62,33 +73,68 @@ nix develop  # Enter development shell
 ### Basic Usage
 
 ```bash
-# Show trending repos from all providers
-trotd
+# Show trending repos from all providers (filters out already-seen repos)
+git trending
+
+# Show all repos including already-seen ones
+git trending --show-all
 
 # Show top 5 repos per provider
-trotd --max 5
+git trending --max 5
 
 # Filter by language
-trotd --lang rust,go
+git trending --lang rust,go
 
 # Filter by star count (minimum 100 stars)
-trotd --min-stars 100
+git trending --min-stars 100
 
 # Exclude specific topics from GitHub
-trotd --exclude-topics awesome,awesome-list
+git trending --exclude-topics awesome,awesome-list
 
 # Combine filters
-trotd --lang rust --min-stars 50 --exclude-topics web
+git trending --lang rust --min-stars 50 --exclude-topics web
 
 # Specific providers only (gh=GitHub, gl=GitLab, ge=Gitea)
-trotd --provider gh,gl
+git trending --provider gh,gl
 
 # JSON output
-trotd --json
+git trending --json
 
 # Disable cache
-trotd --no-cache
+git trending --no-cache
 ```
+
+### Git Extension Usage
+
+```bash
+# Star a repository
+git trending star owner/repo
+
+# Clone a trending repository
+git trending clone owner/repo
+
+# Clone with full URL
+git trending clone https://github.com/owner/repo
+```
+
+### GitHub Integration
+
+To see starred status indicators (⭐) and use the star command, configure your GitHub token:
+
+```bash
+# Via environment variable
+export TROTD_GITHUB_TOKEN="ghp_your_token_here"
+
+# Or in config file (~/.config/trotd/trotd.toml)
+[auth]
+github_token = "ghp_your_token_here"
+
+# Or via CLI flag
+git trending --github-token "ghp_your_token_here"
+```
+
+Generate a personal access token at: https://github.com/settings/tokens
+Required scopes: `public_repo` (or `repo` for private repos)
 
 ### Shell Completions
 
@@ -96,16 +142,16 @@ Generate shell completions for better UX:
 
 ```bash
 # Bash
-trotd completions bash > /etc/bash_completion.d/trotd
+git trending completions bash > /etc/bash_completion.d/git-trending
 
 # Fish
-trotd completions fish > ~/.config/fish/completions/trotd.fish
+git trending completions fish > ~/.config/fish/completions/git-trending.fish
 
 # Zsh
-trotd completions zsh > ~/.zsh/completions/_trotd
+git trending completions zsh > ~/.zsh/completions/_git-trending
 
 # PowerShell
-trotd completions powershell > trotd.ps1
+git trending completions powershell > git-trending.ps1
 ```
 
 ### MOTD Integration
@@ -114,13 +160,37 @@ See [examples/README.md](examples/README.md) for detailed integration guides.
 
 #### Quick Start
 
-Add to your shell RC file (`~/.bashrc`, `~/.zshrc`, or `~/.config/fish/config.fish`):
+**For bash**, add to `~/.bashrc`:
 
 ```bash
-if command -v trotd &> /dev/null; then
-    trotd 2>/dev/null || true
+# Run git-trending in interactive shells only, after tmux/zellij
+if [[ $- == *i* ]] && [ -z "$TMUX" ] && [ -z "$ZELLIJ" ]; then
+    if command -v git-trending &> /dev/null; then
+        git trending 2>/dev/null || true
+    fi
 fi
 ```
+
+**For fish**, add to `~/.config/fish/config.fish`:
+
+```fish
+# Run git-trending in outermost interactive shell only
+# Works with zellij, tmux, starship, etc.
+if status is-interactive; and not set -q TMUX; and not set -q ZELLIJ; and not set -q ZELLIJ_SESSION_NAME
+    if command -v git-trending &> /dev/null
+        # Use event handler to run after shell is fully initialized
+        function __git_trending_motd --on-event fish_prompt
+            git trending 2>/dev/null; or true
+            functions -e __git_trending_motd  # Remove this function after first run
+        end
+    end
+end
+```
+
+This approach ensures the MOTD appears:
+- Only in interactive shells (not scripts)
+- Only in the outermost shell (not inside tmux/zellij)
+- After shell initialization (works with starship, prompt customizations, etc.)
 
 Or use the automated setup script:
 
@@ -144,8 +214,10 @@ max_per_provider = 3
 timeout_secs = 6
 cache_ttl_mins = 60
 language_filter = ["rust", "go"]
-min_stars = 50              # Filter repos below 50 stars
-ascii_only = false          # Hide non-ASCII repo names
+min_stars = 50                    # Filter repos below 50 stars
+ascii_only = false                # Hide non-ASCII repo names
+fast_network_timeout_secs = 3     # Quick timeout for network checks
+show_starred_status = true        # Show ⭐ for starred repos (requires GitHub token)
 
 [providers]
 github = true
@@ -153,7 +225,7 @@ gitlab = true
 gitea = true
 
 [auth]
-github_token = ""
+github_token = ""   # Required for starring and showing starred status
 gitlab_token = ""
 gitea_token = ""
 
@@ -224,9 +296,11 @@ src/
 ├── model.rs        # Repo struct, Provider trait
 ├── render.rs       # MOTD rendering with colors
 ├── cache.rs        # Filesystem cache with TTL
-├── http.rs         # HTTP client wrapper
+├── http.rs         # HTTP client wrapper (GET/PUT/HEAD)
+├── seen.rs         # Daily-reset seen repos tracker
+├── starred.rs      # GitHub starred status cache
 └── providers/
-    ├── github.rs   # GitHub trending API
+    ├── github.rs   # GitHub trending API + starring
     ├── gitlab.rs   # GitLab explore API
     └── gitea.rs    # Gitea search API
 ```

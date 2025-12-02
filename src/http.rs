@@ -1,7 +1,10 @@
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT};
+use reqwest::{
+    header::{HeaderMap, HeaderValue, ACCEPT, AUTHORIZATION, USER_AGENT},
+    Proxy,
+};
 use serde::de::DeserializeOwned;
-use std::time::Duration;
+use std::{env, time::Duration};
 use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
 
@@ -13,7 +16,7 @@ pub struct HttpClient {
     retry_base_ms: u64,
 }
 
-/// Builder for HttpClient with configurable retry and timeout settings
+/// Builder for `HttpClient` with configurable retry and timeout settings
 pub struct HttpClientBuilder {
     timeout_secs: u64,
     max_retries: usize,
@@ -57,12 +60,20 @@ impl HttpClientBuilder {
         self
     }
 
-    /// Build the HttpClient
+    /// Build the `HttpClient`
     pub fn build(self) -> Result<HttpClient> {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(self.timeout_secs))
-            .build()
-            .context("Failed to create HTTP client")?;
+        let mut builder =
+            reqwest::Client::builder().timeout(Duration::from_secs(self.timeout_secs));
+
+        if let Some(proxy) = env_proxy_value(&["HTTPS_PROXY", "https_proxy"]) {
+            builder = builder.proxy(Proxy::https(&proxy).context("Invalid HTTPS proxy URL")?);
+        }
+
+        if let Some(proxy) = env_proxy_value(&["HTTP_PROXY", "http_proxy"]) {
+            builder = builder.proxy(Proxy::http(&proxy).context("Invalid HTTP proxy URL")?);
+        }
+
+        let client = builder.build().context("Failed to create HTTP client")?;
 
         Ok(HttpClient {
             client,
@@ -73,12 +84,16 @@ impl HttpClientBuilder {
     }
 }
 
+fn env_proxy_value(keys: &[&str]) -> Option<String> {
+    keys.iter()
+        .find_map(|key| env::var(key).ok())
+        .filter(|v| !v.is_empty())
+}
+
 impl HttpClient {
     /// Create a new HTTP client with specified timeout
     pub fn new(timeout_secs: u64) -> Result<Self> {
-        HttpClientBuilder::new()
-            .timeout_secs(timeout_secs)
-            .build()
+        HttpClientBuilder::new().timeout_secs(timeout_secs).build()
     }
 
     /// Create a builder for more fine-grained control
@@ -105,7 +120,11 @@ impl HttpClient {
     }
 
     /// Internal method to fetch JSON once (used by retry logic)
-    async fn get_json_once<T: DeserializeOwned>(&self, url: &str, token: Option<&str>) -> Result<T> {
+    async fn get_json_once<T: DeserializeOwned>(
+        &self,
+        url: &str,
+        token: Option<&str>,
+    ) -> Result<T> {
         let mut headers = HeaderMap::new();
         headers.insert(USER_AGENT, HeaderValue::from_static("trotd/0.1.0"));
         headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -153,10 +172,7 @@ impl HttpClient {
             .map(jitter)
             .take(self.max_retries);
 
-        Retry::spawn(retry_strategy, || async {
-            self.get_html_once(url).await
-        })
-        .await
+        Retry::spawn(retry_strategy, || async { self.get_html_once(url).await }).await
     }
 
     /// Internal method to fetch HTML once (used by retry logic)
@@ -189,6 +205,94 @@ impl HttpClient {
             .text()
             .await
             .with_context(|| format!("Failed to read HTML response from {url}"))
+    }
+
+    /// Send a PUT request (for starring repositories)
+    pub async fn put(&self, url: &str, token: Option<&str>) -> Result<()> {
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, HeaderValue::from_static("trotd/0.1.0"));
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+
+        if let Some(token) = token {
+            let auth_value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("Invalid authentication token")?;
+            headers.insert(AUTHORIZATION, auth_value);
+        }
+
+        let response = self
+            .client
+            .put(url)
+            .headers(headers)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .with_context(|| format!("Failed to PUT to URL: {url}"))?;
+
+        let status = response.status();
+
+        if !status.is_success() && status != reqwest::StatusCode::NO_CONTENT {
+            anyhow::bail!("PUT request failed with status {status}: {url}");
+        }
+
+        Ok(())
+    }
+
+    /// Send a DELETE request (for unstarring repositories)
+    #[allow(dead_code)]
+    pub async fn delete(&self, url: &str, token: Option<&str>) -> Result<()> {
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, HeaderValue::from_static("trotd/0.1.0"));
+        headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+
+        if let Some(token) = token {
+            let auth_value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("Invalid authentication token")?;
+            headers.insert(AUTHORIZATION, auth_value);
+        }
+
+        let response = self
+            .client
+            .delete(url)
+            .headers(headers)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .with_context(|| format!("Failed to DELETE to URL: {url}"))?;
+
+        let status = response.status();
+
+        if !status.is_success() && status != reqwest::StatusCode::NO_CONTENT {
+            anyhow::bail!("DELETE request failed with status {status}: {url}");
+        }
+
+        Ok(())
+    }
+
+    /// Send a HEAD request to check if a resource exists (for checking starred status)
+    #[allow(dead_code)]
+    pub async fn head(&self, url: &str, token: Option<&str>) -> Result<bool> {
+        let mut headers = HeaderMap::new();
+        headers.insert(USER_AGENT, HeaderValue::from_static("trotd/0.1.0"));
+
+        if let Some(token) = token {
+            let auth_value = HeaderValue::from_str(&format!("Bearer {token}"))
+                .context("Invalid authentication token")?;
+            headers.insert(AUTHORIZATION, auth_value);
+        }
+
+        let response = self
+            .client
+            .head(url)
+            .headers(headers)
+            .timeout(self.timeout)
+            .send()
+            .await
+            .with_context(|| format!("Failed to HEAD URL: {url}"))?;
+
+        let status = response.status();
+
+        // GitHub returns 204 if starred, 404 if not starred
+        Ok(status == reqwest::StatusCode::NO_CONTENT || status.is_success())
     }
 }
 
@@ -235,9 +339,8 @@ mod tests {
             .unwrap();
 
         // This should timeout quickly (using a slow endpoint)
-        let result: Result<serde_json::Value> = client
-            .get_json("https://httpbin.org/delay/10", None)
-            .await;
+        let result: Result<serde_json::Value> =
+            client.get_json("https://httpbin.org/delay/10", None).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string().to_lowercase();
@@ -298,9 +401,8 @@ mod tests {
             .unwrap();
 
         // This returns HTML, not JSON
-        let result: Result<serde_json::Value> = client
-            .get_json("https://httpbin.org/html", None)
-            .await;
+        let result: Result<serde_json::Value> =
+            client.get_json("https://httpbin.org/html", None).await;
 
         assert!(result.is_err());
         let err_msg = result.unwrap_err().to_string().to_lowercase();

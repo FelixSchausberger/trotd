@@ -1,6 +1,6 @@
-# trotd Integration Examples
+# git-trending Integration Examples
 
-This directory contains examples of how to integrate `trotd` into various workflows.
+This directory contains examples of how to integrate `git trending` into various workflows.
 
 ## MOTD (Message of the Day)
 
@@ -16,41 +16,81 @@ This will configure your system to show trending repos on login.
 
 ### Manual Shell Integration
 
-For bash, add to `~/.bashrc`:
+**For bash**, add to `~/.bashrc`:
 
 ```bash
-if command -v trotd &> /dev/null; then
-    trotd 2>/dev/null || true
+# Run git-trending in interactive shells only, after tmux/zellij
+if [[ $- == *i* ]] && [ -z "$TMUX" ] && [ -z "$ZELLIJ" ]; then
+    if command -v git-trending &> /dev/null; then
+        git trending 2>/dev/null || true
+    fi
 fi
 ```
 
-For zsh, add to `~/.zshrc`:
+**For zsh**, add to `~/.zshrc`:
 
 ```zsh
-if command -v trotd &> /dev/null; then
-    trotd 2>/dev/null || true
+# Run git-trending in interactive shells only, after tmux/zellij
+if [[ -o interactive ]] && [ -z "$TMUX" ] && [ -z "$ZELLIJ" ]; then
+    if command -v git-trending &> /dev/null; then
+        git trending 2>/dev/null || true
+    fi
 fi
 ```
 
-For fish, add to `~/.config/fish/config.fish`:
+**For fish**, add to `~/.config/fish/config.fish`:
 
 ```fish
-if command -v trotd &> /dev/null
-    trotd 2>/dev/null; or true
+# Run git-trending in outermost interactive shell only
+# Works with zellij, tmux, starship, etc.
+if status is-interactive; and not set -q TMUX; and not set -q ZELLIJ; and not set -q ZELLIJ_SESSION_NAME
+    if command -v git-trending &> /dev/null
+        # Use event handler to run after shell is fully initialized
+        function __git_trending_motd --on-event fish_prompt
+            git trending 2>/dev/null; or true
+            functions -e __git_trending_motd  # Remove this function after first run
+        end
+    end
 end
 ```
 
+**Why this approach?**
+- **Interactive check**: Only runs in interactive shells (not scripts)
+- **Multiplexer detection**: Skips inside tmux/zellij sessions (shows only on outer shell)
+- **Fish event handler**: Uses `fish_prompt` event to run after shell initialization (starship, etc.)
+- **Self-cleanup**: Fish function removes itself after first run
+
 ### Advanced: Show Once Per Day
+
+**For bash/zsh**:
 
 ```bash
 TROTD_CACHE="$HOME/.cache/trotd/.shown_today"
 TODAY=$(date +%Y-%m-%d)
 
 if [ ! -f "$TROTD_CACHE" ] || [ "$(cat $TROTD_CACHE)" != "$TODAY" ]; then
-    if command -v trotd &> /dev/null; then
-        trotd && echo "$TODAY" > "$TROTD_CACHE"
+    if command -v git-trending &> /dev/null; then
+        git trending && echo "$TODAY" > "$TROTD_CACHE"
     fi
 fi
+```
+
+**For fish**:
+
+```fish
+if status is-interactive; and not set -q TMUX; and not set -q ZELLIJ
+    set -l cache_file "$HOME/.cache/trotd/.shown_today"
+    set -l today (date +%Y-%m-%d)
+
+    if not test -f "$cache_file"; or test (cat "$cache_file" 2>/dev/null) != "$today"
+        if command -v git-trending &> /dev/null
+            function __git_trending_motd --on-event fish_prompt
+                git trending 2>/dev/null && echo $today > $cache_file
+                functions -e __git_trending_motd
+            end
+        end
+    end
+end
 ```
 
 ## Systemd Timer (Auto-Refresh)
@@ -70,27 +110,27 @@ Generate shell completions for better UX:
 ### Bash
 
 ```bash
-trotd completions bash > /etc/bash_completion.d/trotd
+git trending completions bash > /etc/bash_completion.d/git-trending
 ```
 
 Or for user-only:
 
 ```bash
 mkdir -p ~/.local/share/bash-completion/completions
-trotd completions bash > ~/.local/share/bash-completion/completions/trotd
+git trending completions bash > ~/.local/share/bash-completion/completions/git-trending
 ```
 
 ### Fish
 
 ```bash
-trotd completions fish > ~/.config/fish/completions/trotd.fish
+git trending completions fish > ~/.config/fish/completions/git-trending.fish
 ```
 
 ### Zsh
 
 ```bash
 mkdir -p ~/.zsh/completions
-trotd completions zsh > ~/.zsh/completions/_trotd
+git trending completions zsh > ~/.zsh/completions/_git-trending
 ```
 
 Then add to `~/.zshrc`:
@@ -107,7 +147,7 @@ autoload -Uz compinit && compinit
 Show only Rust and Go repositories:
 
 ```bash
-trotd --lang rust,go
+git trending --lang rust,go
 ```
 
 ### Filter by Star Count
@@ -115,7 +155,7 @@ trotd --lang rust,go
 Show only popular repos (100+ stars):
 
 ```bash
-trotd --min-stars 100
+git trending --min-stars 100
 ```
 
 ### Exclude Topics (GitHub Only)
@@ -123,13 +163,13 @@ trotd --min-stars 100
 Exclude certain topics from GitHub results:
 
 ```bash
-trotd --exclude-topics awesome,awesome-list
+git trending --exclude-topics awesome,awesome-list
 ```
 
 ### Combine Filters
 
 ```bash
-trotd --lang rust --min-stars 50 --exclude-topics web
+git trending --lang rust --min-stars 50 --exclude-topics web
 ```
 
 ### Use in Scripts
@@ -141,7 +181,7 @@ trotd --lang rust --min-stars 50 --exclude-topics web
 {
     echo "Subject: Daily Trending Repos"
     echo ""
-    trotd
+    git trending
 } | sendmail user@example.com
 ```
 
@@ -149,11 +189,11 @@ trotd --lang rust --min-stars 50 --exclude-topics web
 
 ```bash
 # Get just the repo names
-trotd --json | jq -r '.[].name'
+git trending --json | jq -r '.[].name'
 
 # Get repos with their star counts
-trotd --json | jq -r '.[] | "\(.name): \(.stars_total) stars"'
+git trending --json | jq -r '.[] | "\(.name): \(.stars_total) stars"'
 
 # Filter JSON output
-trotd --json | jq '.[] | select(.stars_total > 100)'
+git trending --json | jq '.[] | select(.stars_total > 100)'
 ```
